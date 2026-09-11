@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+tavily-python
+python-dotenv
+pydantic
+sentence-transformers
+numpy
+scikit-learn
+google-genai
+langdetect
+python-multipart
+easyocr
+Pillow
