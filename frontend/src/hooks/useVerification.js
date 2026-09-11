@@ -22,12 +22,17 @@ export function useVerification() {
     try {
       const data = await verifyClaim(claim.trim());
 
-      if (!data.results || data.results.length === 0) {
+      // New backend returns { evidence, verdict, summary, ... }
+      // Old backend returned { results: [...] }
+      const evidenceList = data.evidence ?? data.results ?? [];
+
+      if (!evidenceList || evidenceList.length === 0) {
         setState('empty');
-        setResults([]);
+        setResults(null);
       } else {
         setState('success');
-        setResults(data.results);
+        // Pass the full response so ResultsSection can show verdict + evidence
+        setResults(data);
       }
     } catch (err) {
       setState('error');

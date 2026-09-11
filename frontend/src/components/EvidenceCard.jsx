@@ -1,29 +1,71 @@
 import './EvidenceCard.css';
 
-export default function EvidenceCard({ result }) {
-  const { rank, title, url, content, search_score, semantic_score } = result;
+const STANCE_COLORS = {
+  supporting:    '#22c55e',
+  contradicting: '#ef4444',
+  contextual:    '#3b82f6',
+  unclear:       '#64748b',
+};
 
-  const domain = (() => {
+export default function EvidenceCard({ result }) {
+  const {
+    rank, title, url, content,
+    search_score, semantic_score,
+    source_reliability_score, combined_score, stance,
+    source_domain, source_type,
+  } = result;
+
+  const domain = source_domain ?? (() => {
     try { return new URL(url).hostname.replace('www.', ''); }
     catch { return url; }
   })();
+
+  const stanceColor = STANCE_COLORS[stance?.toLowerCase()] ?? '#64748b';
 
   return (
     <article className="window-card evidence-card" aria-label={`Evidence source ${rank}`}>
       <div className="window-titlebar">
         <div className="window-dots"><span /><span /></div>
         <span>EVIDENCE #{String(rank).padStart(2, '0')}</span>
+        {stance && (
+          <span style={{
+            marginLeft: 'auto',
+            fontSize: '0.7rem',
+            fontWeight: 600,
+            letterSpacing: '0.05em',
+            color: stanceColor,
+            border: `1px solid ${stanceColor}`,
+            borderRadius: '99px',
+            padding: '0 0.5rem',
+          }}>
+            {stance.toUpperCase()}
+          </span>
+        )}
       </div>
       <div className="window-content evidence-content">
         <div className="evidence-scores">
           <div className="score-item">
-            <span className="label-caps">Semantic Relevance</span>
+            <span className="label-caps">Semantic</span>
             <span className="data-value">{semantic_score?.toFixed(2) ?? '—'}</span>
           </div>
-          <div className="score-item">
-            <span className="label-caps">Search Score</span>
-            <span className="data-value">{search_score?.toFixed(2) ?? '—'}</span>
-          </div>
+          {source_reliability_score != null && (
+            <div className="score-item">
+              <span className="label-caps">Reliability</span>
+              <span className="data-value">{source_reliability_score?.toFixed(2)}</span>
+            </div>
+          )}
+          {combined_score != null && (
+            <div className="score-item">
+              <span className="label-caps">Combined</span>
+              <span className="data-value">{combined_score?.toFixed(2)}</span>
+            </div>
+          )}
+          {search_score != null && (
+            <div className="score-item">
+              <span className="label-caps">Search</span>
+              <span className="data-value">{search_score?.toFixed(2)}</span>
+            </div>
+          )}
         </div>
 
         <h3 className="evidence-title">{title || 'Untitled Source'}</h3>
@@ -37,7 +79,9 @@ export default function EvidenceCard({ result }) {
         </p>
 
         <div className="evidence-footer">
-          <span className="evidence-source mono">{domain}</span>
+          <span className="evidence-source mono">
+            {domain}{source_type ? ` · ${source_type}` : ''}
+          </span>
           <a
             href={url}
             target="_blank"
