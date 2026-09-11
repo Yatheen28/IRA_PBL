@@ -2,7 +2,7 @@
 ### *Cross-Platform Multilingual Misinformation Knowledge Explorer*
 > **"Verify Before You Share."**
 
-![Stage](https://img.shields.io/badge/Stage-2%20Semantic%20Ranking-blue)
+![Stage](https://img.shields.io/badge/Stage-9%20Full%20Pipeline-blue)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?logo=fastapi)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
@@ -23,13 +23,13 @@ The system is being built **incrementally**, one layer at a time.
 |-------|-----------|--------|
 | **1** | Web Evidence Retrieval (Tavily) | ✅ **Complete** |
 | **2** | Semantic Evidence Ranking (BGE) | ✅ **Complete** |
-| 3 | Source Reliability Scoring | ⏳ Pending |
-| 4 | Evidence Ranking & Clustering | ⏳ Pending |
-| 5 | Gemini Grounded Verdict Generation | ⏳ Pending |
-| 6 | OCR / Image Claim Extraction | ⏳ Pending |
-| 7 | Knowledge Graph Integration | ⏳ Pending |
-| 8 | Multilingual Support | ⏳ Pending |
-| 9 | React Frontend (full integration) | ⏳ Pending |
+| **3** | Source Reliability Scoring | ✅ **Complete** |
+| **4** | Evidence Ranking & Clustering (BM25 + RRF) | ✅ **Complete** |
+| **5** | Gemini Grounded Verdict Generation | ✅ **Complete** |
+| **6** | OCR / Image Claim Extraction | ✅ **Complete** |
+| **7** | Knowledge Graph Integration | ✅ **Complete** |
+| **8** | Multilingual Support | ✅ **Complete** |
+| **9** | React Frontend (full integration) | ✅ **Complete** |
 
 ---
 
@@ -370,4 +370,4 @@ This is an incremental build. Each stage is isolated and tested before the next 
 
 ---
 
-*README last updated: Stage 2 – Semantic Evidence Ranking*
+*README last updated: Stage 9 – Full Pipeline Hardening*

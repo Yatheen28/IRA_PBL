@@ -221,6 +221,20 @@ def generate_verdict(
         raw_text = response.text
     except Exception as exc:
         logger.error("Gemini API call failed: %s", exc)
+        exc_str = str(exc)
+        if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str or "Quota exceeded" in exc_str:
+            logger.warning("Gemini API rate limited (429). Returning safe fallback verdict.")
+            return {
+                "verdict": "UNVERIFIED",
+                "analysis_confidence": 0.0,
+                "summary": "The evidence was retrieved successfully, but the AI explanation service is temporarily rate-limited. Please retry shortly.",
+                "reasoning": "The system successfully retrieved and ranked relevant evidence from the web. However, the external AI service used to summarize and evaluate these claims is currently experiencing heavy load (API rate limit). Please review the retrieved sources below directly, or try again in 30 seconds.",
+                "supporting_evidence": [],
+                "contradicting_evidence": [],
+                "contextual_evidence": [],
+                "limitations": ["Verdict generation is temporarily unavailable due to API rate limits."],
+                "evidence": evidence,
+            }
         raise RuntimeError(f"Gemini verdict generation failed: {exc}") from exc
 
     try:

@@ -45,18 +45,29 @@ class EvidenceItem(BaseModel):
     url: str
     content: str
     search_score: float | None = None
-    semantic_score: float
+    semantic_score: float | None = None
+    lexical_score: float | None = None
+    fusion_score: float | None = None
     source_domain: str
     source_type: str
     source_reliability_score: float
+    reliability_tier: str = "UNKNOWN"
     reliability_reason: str
     combined_score: float
     stance: str
+    retrieval_provider: str = "tavily"
 
 
 class KnowledgeGraphData(BaseModel):
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
+
+
+class SourceDiversityMeta(BaseModel):
+    unique_domains: int
+    domain_distribution: dict[str, int]
+    max_domain_concentration: float
+    total_evidence: int
 
 
 class VerifyResponse(BaseModel):
@@ -70,11 +81,30 @@ class VerifyResponse(BaseModel):
     evidence: list[EvidenceItem]
     knowledge_graph: KnowledgeGraphData
     limitations: list[str]
+    source_diversity: SourceDiversityMeta | None = None
 
 
 # ── Shared pipeline logic ──────────────────────────────────────────────────────
 
-def _run_pipeline(english_claim: str) -> dict[str, Any]:
+import asyncio
+from collections import Counter
+
+
+def _compute_source_diversity(evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute source diversity metadata from evidence list."""
+    domains = [e.get("source_domain", "unknown") for e in evidence]
+    dist = dict(Counter(domains))
+    total = len(evidence)
+    max_conc = max(dist.values()) / total if total > 0 else 0.0
+    return {
+        "unique_domains": len(dist),
+        "domain_distribution": dist,
+        "max_domain_concentration": round(max_conc, 4),
+        "total_evidence": total,
+    }
+
+
+async def _run_pipeline(english_claim: str) -> dict[str, Any]:
     """
     Core verification pipeline for an English-normalised claim.
     Returns a dict matching VerifyResponse fields (minus language wrappers).
@@ -82,7 +112,7 @@ def _run_pipeline(english_claim: str) -> dict[str, Any]:
     # Stage 1 – Tavily web retrieval
     logger.info("Stage 1: Tavily retrieval for claim: %r", english_claim[:80])
     try:
-        raw_evidence = search_evidence(english_claim)
+        raw_evidence = await asyncio.to_thread(search_evidence, english_claim, 15)
     except EnvironmentError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
@@ -94,14 +124,14 @@ def _run_pipeline(english_claim: str) -> dict[str, Any]:
     # Stage 2 – BGE semantic ranking
     logger.info("Stage 2: BGE semantic ranking (%d results)", len(raw_evidence))
     try:
-        ranked = rank_results(claim=english_claim, results=raw_evidence)
+        ranked = await asyncio.to_thread(rank_results, english_claim, raw_evidence)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Semantic ranking failed: {exc}") from exc
 
     # Stage 3+4 – Source reliability + evidence analysis
     logger.info("Stage 3+4: Source reliability scoring and evidence analysis")
     try:
-        enriched = analyze_evidence(ranked_results=ranked)
+        enriched = await asyncio.to_thread(analyze_evidence, english_claim, ranked)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Evidence analysis failed: {exc}") from exc
 
@@ -111,7 +141,13 @@ def _run_pipeline(english_claim: str) -> dict[str, Any]:
     # Stage 5 – Gemini grounded verdict
     logger.info("Stage 5: Gemini verdict generation")
     try:
-        verdict_result = generate_verdict(claim=english_claim, evidence=enriched)
+        # Wrap Gemini call with a sensible 25-second timeout
+        verdict_result = await asyncio.wait_for(
+            asyncio.to_thread(generate_verdict, english_claim, enriched),
+            timeout=25.0
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Gemini analysis timed out.") from exc
     except EnvironmentError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
@@ -120,14 +156,18 @@ def _run_pipeline(english_claim: str) -> dict[str, Any]:
     # Stage 8 – Knowledge graph
     logger.info("Stage 8: Building knowledge graph")
     try:
-        graph = build_graph(
-            claim=english_claim,
-            verdict=verdict_result["verdict"],
-            evidence=verdict_result["evidence"],
+        graph = await asyncio.to_thread(
+            build_graph,
+            english_claim,
+            verdict_result["verdict"],
+            verdict_result["evidence"]
         )
     except Exception as exc:
         logger.warning("Knowledge graph generation failed (non-fatal): %s", exc)
         graph = {"nodes": [], "edges": []}
+
+    # Compute source diversity metadata
+    diversity = _compute_source_diversity(verdict_result["evidence"])
 
     return {
         "verdict":                verdict_result["verdict"],
@@ -137,6 +177,7 @@ def _run_pipeline(english_claim: str) -> dict[str, Any]:
         "evidence":               verdict_result["evidence"],
         "knowledge_graph":        graph,
         "limitations":            verdict_result["limitations"],
+        "source_diversity":       diversity,
     }
 
 
@@ -172,15 +213,23 @@ async def verify_claim(body: VerifyRequest) -> VerifyResponse:
     english_claim = lang_info["normalized_claim"]
     detected_lang = lang_info["language"]
 
-    pipeline = _run_pipeline(english_claim)
+    pipeline = await _run_pipeline(english_claim)
 
     # Translate summary/reasoning back to detected language if not English
     summary = pipeline["summary"]
     reasoning = pipeline["reasoning"]
     if detected_lang not in ("en", "en-US", "en-GB"):
         try:
-            summary = translate_from_english(summary, detected_lang)
-            reasoning = translate_from_english(reasoning, detected_lang)
+            # Run both translations concurrently with a timeout
+            summary, reasoning = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(translate_from_english, summary, detected_lang),
+                    asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                ),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Back-translation timed out — returning English response")
         except Exception as exc:
             logger.warning("Back-translation failed: %s — returning English response", exc)
 
@@ -195,6 +244,7 @@ async def verify_claim(body: VerifyRequest) -> VerifyResponse:
         evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
         knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
         limitations=pipeline["limitations"],
+        source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]),
     )
 
 
@@ -238,14 +288,21 @@ async def verify_image(
     english_claim = lang_info["normalized_claim"]
     detected_lang = lang_info["language"]
 
-    pipeline = _run_pipeline(english_claim)
+    pipeline = await _run_pipeline(english_claim)
 
     summary = pipeline["summary"]
     reasoning = pipeline["reasoning"]
     if detected_lang not in ("en", "en-US", "en-GB"):
         try:
-            summary = translate_from_english(summary, detected_lang)
-            reasoning = translate_from_english(reasoning, detected_lang)
+            summary, reasoning = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(translate_from_english, summary, detected_lang),
+                    asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                ),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Back-translation timed out — returning English response")
         except Exception as exc:
             logger.warning("Back-translation failed: %s", exc)
 
@@ -260,4 +317,5 @@ async def verify_image(
         evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
         knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
         limitations=pipeline["limitations"],
+        source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]),
     )

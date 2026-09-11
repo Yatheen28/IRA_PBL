@@ -10,9 +10,9 @@ const STANCE_COLORS = {
 export default function EvidenceCard({ result }) {
   const {
     rank, title, url, content,
-    search_score, semantic_score,
+    search_score, semantic_score, lexical_score, fusion_score,
     source_reliability_score, combined_score, stance,
-    source_domain, source_type,
+    source_domain, source_type, reliability_tier,
   } = result;
 
   const domain = source_domain ?? (() => {
@@ -27,9 +27,27 @@ export default function EvidenceCard({ result }) {
       <div className="window-titlebar">
         <div className="window-dots"><span /><span /></div>
         <span>EVIDENCE #{String(rank).padStart(2, '0')}</span>
-        {stance && (
+        
+        {source_type && (
           <span style={{
             marginLeft: 'auto',
+            fontSize: '0.65rem',
+            fontWeight: 700,
+            letterSpacing: '0.05em',
+            color: '#a855f7',
+            border: '1px solid #a855f7',
+            borderRadius: '4px',
+            padding: '0.1rem 0.4rem',
+            marginRight: '0.5rem',
+            backgroundColor: 'rgba(168, 85, 247, 0.1)',
+          }}>
+            {source_type.toUpperCase()}
+          </span>
+        )}
+
+        {stance && (
+          <span style={{
+            marginLeft: source_type ? '0' : 'auto',
             fontSize: '0.7rem',
             fontWeight: 600,
             letterSpacing: '0.05em',
@@ -44,10 +62,24 @@ export default function EvidenceCard({ result }) {
       </div>
       <div className="window-content evidence-content">
         <div className="evidence-scores">
-          <div className="score-item">
-            <span className="label-caps">Semantic</span>
-            <span className="data-value">{semantic_score?.toFixed(2) ?? '—'}</span>
-          </div>
+          {semantic_score != null && (
+            <div className="score-item">
+              <span className="label-caps">Semantic</span>
+              <span className="data-value">{semantic_score?.toFixed(2)}</span>
+            </div>
+          )}
+          {lexical_score != null && (
+            <div className="score-item">
+              <span className="label-caps">Lexical</span>
+              <span className="data-value">{lexical_score?.toFixed(2)}</span>
+            </div>
+          )}
+          {fusion_score != null && (
+            <div className="score-item">
+              <span className="label-caps">Fusion (RRF)</span>
+              <span className="data-value">{fusion_score?.toFixed(4)}</span>
+            </div>
+          )}
           {source_reliability_score != null && (
             <div className="score-item">
               <span className="label-caps">Reliability</span>
@@ -55,15 +87,9 @@ export default function EvidenceCard({ result }) {
             </div>
           )}
           {combined_score != null && (
-            <div className="score-item">
-              <span className="label-caps">Combined</span>
-              <span className="data-value">{combined_score?.toFixed(2)}</span>
-            </div>
-          )}
-          {search_score != null && (
-            <div className="score-item">
-              <span className="label-caps">Search</span>
-              <span className="data-value">{search_score?.toFixed(2)}</span>
+            <div className="score-item" style={{backgroundColor: 'rgba(255, 255, 255, 0.05)', padding: '0 4px', borderRadius: '4px'}}>
+              <span className="label-caps" style={{color: '#fff'}}>Combined</span>
+              <span className="data-value" style={{fontWeight: '700'}}>{combined_score?.toFixed(2)}</span>
             </div>
           )}
         </div>
@@ -81,6 +107,20 @@ export default function EvidenceCard({ result }) {
         <div className="evidence-footer">
           <span className="evidence-source mono">
             {domain}{source_type ? ` · ${source_type}` : ''}
+            {reliability_tier && (
+              <span style={{
+                marginLeft: '0.5rem',
+                fontSize: '0.6rem',
+                fontWeight: 700,
+                color: reliability_tier === 'HIGH' ? '#22c55e'
+                     : reliability_tier === 'MEDIUM' ? '#f59e0b'
+                     : reliability_tier === 'LOW' ? '#ef4444'
+                     : '#64748b',
+                opacity: 0.9,
+              }}>
+                [{reliability_tier}]
+              </span>
+            )}
           </span>
           <a
             href={url}

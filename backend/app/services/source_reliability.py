@@ -29,7 +29,21 @@ SCORES: dict[str, float] = {
     "reference":              0.75,
     "general_web":            0.50,
     "user_generated":         0.30,
-    "unknown":                0.50,
+    "unknown":                0.40,   # Distinct from general_web — UNKNOWN stays UNKNOWN
+}
+
+# Explicit tier labels — these are transparency labels, NOT truth claims
+TIER_LABELS: dict[str, str] = {
+    "government":             "HIGH",
+    "international_authority": "HIGH",
+    "scientific_medical":     "HIGH",
+    "fact_checking":          "HIGH",
+    "academic_research":      "HIGH",
+    "established_news":       "HIGH",
+    "reference":              "MEDIUM",
+    "general_web":            "MEDIUM",
+    "user_generated":         "LOW",
+    "unknown":                "UNKNOWN",
 }
 
 # ── Curated seed domain → source-type mapping ─────────────────────────────────
@@ -216,5 +230,6 @@ def score_source(url: str) -> dict[str, Any]:
         "source_domain": domain,
         "source_type": source_type,
         "source_reliability_score": round(reliability_score, 4),
+        "reliability_tier": TIER_LABELS.get(source_type, "UNKNOWN"),
         "reliability_reason": reason,
     }

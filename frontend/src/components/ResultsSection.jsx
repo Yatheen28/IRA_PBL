@@ -2,11 +2,13 @@ import EvidenceCard from './EvidenceCard';
 import './ResultsSection.css';
 
 const VERDICT_LABELS = {
-  true:            { label: 'TRUE',            color: '#22c55e' },
-  false:           { label: 'FALSE',           color: '#ef4444' },
-  misleading:      { label: 'MISLEADING',      color: '#f59e0b' },
-  unverified:      { label: 'UNVERIFIED',      color: '#64748b' },
-  partially_true:  { label: 'PARTIALLY TRUE',  color: '#3b82f6' },
+  true:                    { label: 'TRUE',                    color: '#22c55e' },
+  false:                   { label: 'FALSE',                   color: '#ef4444' },
+  misleading:              { label: 'MISLEADING',              color: '#f59e0b' },
+  partially_true:          { label: 'PARTIALLY TRUE',          color: '#3b82f6' },
+  insufficient_evidence:   { label: 'INSUFFICIENT EVIDENCE',   color: '#64748b' },
+  conflicting_evidence:    { label: 'CONFLICTING EVIDENCE',    color: '#f97316' },
+  unverified:              { label: 'UNVERIFIED',              color: '#64748b' },
 };
 
 function VerdictBadge({ verdict, confidence }) {
@@ -32,7 +34,7 @@ function VerdictBadge({ verdict, confidence }) {
       </span>
       {confidence != null && (
         <span className="label-caps" style={{ color: 'var(--muted, #94a3b8)' }}>
-          Confidence: {Math.round(confidence * 100)}%
+          Analysis Confidence: {Math.round(confidence * 100)}%
         </span>
       )}
     </div>
@@ -93,7 +95,7 @@ export default function ResultsSection({ claim, results, onReset }) {
       )}
 
       <p className="results-summary label-caps">
-        {evidence.length} source{evidence.length !== 1 ? 's' : ''} retrieved — ranked by semantic relevance
+        {evidence.length} source{evidence.length !== 1 ? 's' : ''} retrieved — ranked by hybrid fusion (semantic + lexical)
       </p>
 
       <div className="evidence-grid">

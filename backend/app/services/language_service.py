@@ -137,8 +137,12 @@ def normalize_claim(claim: str) -> dict[str, Any]:
             "language": str,           # detected language code
         }
     """
-    lang = detect_language(claim)
-    english_claim = translate_to_english(claim, lang)
+    import re
+    # Lightweight normalization: collapse whitespace
+    clean_claim = re.sub(r'\s+', ' ', claim).strip()
+    
+    lang = detect_language(clean_claim)
+    english_claim = translate_to_english(clean_claim, lang)
     return {
         "original_claim": claim,
         "normalized_claim": english_claim,
