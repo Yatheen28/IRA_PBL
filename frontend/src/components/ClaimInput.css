@@ -1,0 +1,57 @@
+.claim-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.claim-textarea-container {
+  border: 2px solid var(--color-border);
+  background: var(--color-bg-card);
+}
+
+.claim-textarea {
+  width: 100%;
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: transparent;
+  border: none;
+  resize: vertical;
+  min-height: 120px;
+}
+
+.claim-textarea:focus {
+  outline: none;
+}
+
+.claim-textarea-container:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.claim-textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+.claim-textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.claim-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.char-counter {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 11px;
+}

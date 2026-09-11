@@ -1,0 +1,55 @@
+.results-section {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  padding: 40px 0;
+}
+
+.results-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 24px;
+  border-bottom: 2px solid var(--color-border);
+}
+
+.results-heading {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.results-claim {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  word-break: break-word;
+}
+
+.results-summary {
+  margin-top: 4px;
+}
+
+.evidence-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.results-actions {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+}
+
+@media (min-width: 769px) {
+  .evidence-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+
+  /* Full width for the last card if odd count */
+  .evidence-grid > *:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
