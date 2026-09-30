@@ -1,0 +1,45 @@
+.error-container {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0;
+}
+
+.error-card {
+  max-width: 480px;
+  width: 100%;
+  box-shadow: var(--offset-shadow) var(--offset-shadow) 0px var(--color-error);
+}
+
+.error-titlebar {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.error-titlebar .window-dots span {
+  background: var(--color-error);
+}
+
+.error-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.error-message {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-error);
+}
+
+.error-hint {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.error-hint code {
+  background: var(--color-bg);
+  padding: 2px 6px;
+  border: 1px solid var(--color-border-light);
+  font-size: 12px;
+}

@@ -1,0 +1,36 @@
+/* ===== VAJRA AI Design Tokens ===== */
+:root {
+  /* Colors — Monochrome + Single Accent */
+  --color-primary: #1A1A1A;
+  --color-primary-hover: #333333;
+  --color-bg: #F5F5F0;
+  --color-bg-card: #FFFFFF;
+  --color-bg-titlebar: #E0E0DB;
+  --color-border: #1A1A1A;
+  --color-border-light: #C0C0C0;
+  --color-text: #1A1A1A;
+  --color-text-secondary: #4A4A4A;
+  --color-text-muted: #808080;
+  --color-accent: #2563EB;
+  --color-accent-hover: #1D4ED8;
+  --color-error: #B91C1C;
+  --color-error-bg: #FEE2E2;
+  --color-surface: #EAEAE5;
+
+  /* Typography */
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-sans: 'IBM Plex Sans', sans-serif;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --space-2xl: 64px;
+
+  /* Layout */
+  --container-max: 960px;
+  --border-width: 2px;
+  --offset-shadow: 4px;
+}

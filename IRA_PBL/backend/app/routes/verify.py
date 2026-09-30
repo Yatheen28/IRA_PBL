@@ -1,0 +1,379 @@
+"""
+/verify route – VAJRA AI
+========================
+Full pipeline: Language → Tavily → BGE → Source Reliability →
+               Evidence Analysis → Gemini Verdict → Knowledge Graph
+
+Also exposes:
+  POST /verify/image       for image-based claims via OCR then pipeline
+  POST /verify/image/ai-detect  for AI-generated image detection
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, field_validator
+
+from app.services.web_retriever import search_evidence
+from app.services.semantic_ranker import rank_results
+from app.services.evidence_analyzer import analyze_evidence
+from app.services.verdict_engine import generate_verdict
+from app.services.language_service import normalize_claim, translate_from_english
+from app.services.knowledge_graph import build_graph
+from app.services.ai_image_detector import detect_ai_image
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+# ── Pydantic schemas ──────────────────────────────────────────────────────────
+
+class VerifyRequest(BaseModel):
+    claim: str
+
+    @field_validator("claim")
+    @classmethod
+    def claim_must_not_be_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("claim must not be empty or whitespace-only")
+        return v.strip()
+
+
+class EvidenceItem(BaseModel):
+    rank: int
+    title: str
+    url: str
+    content: str
+    search_score: float | None = None
+    semantic_score: float | None = None
+    lexical_score: float | None = None
+    fusion_score: float | None = None
+    source_domain: str
+    source_type: str
+    source_reliability_score: float
+    reliability_tier: str = "UNKNOWN"
+    reliability_reason: str
+    combined_score: float
+    stance: str
+    retrieval_provider: str = "tavily"
+
+
+class KnowledgeGraphData(BaseModel):
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
+    timeline: list[dict[str, Any]] = []
+    variations: list[dict[str, Any]] = []
+    spread_path: list[dict[str, Any]] = []
+    debunking_path: list[dict[str, Any]] = []
+    current_status: str = ""
+    current_status_summary: str = ""
+    evidence_nodes: list[dict[str, Any]] = []
+
+
+
+class SourceDiversityMeta(BaseModel):
+    unique_domains: int
+    domain_distribution: dict[str, int]
+    max_domain_concentration: float
+    total_evidence: int
+
+
+class VerifyResponse(BaseModel):
+    original_claim: str
+    normalized_claim: str
+    language: str
+    verdict: str
+    analysis_confidence: float
+    summary: str
+    reasoning: str
+    evidence: list[EvidenceItem]
+    knowledge_graph: KnowledgeGraphData
+    limitations: list[str]
+    source_diversity: SourceDiversityMeta | None = None
+
+
+class AIImageDetectResponse(BaseModel):
+    verdict: str                    # AI_GENERATED | AUTHENTIC | UNCERTAIN
+    confidence: float
+    summary: str
+    indicators: list[str]
+    limitations: list[str]
+
+
+# ── Shared pipeline logic ──────────────────────────────────────────────────────
+
+import asyncio
+from collections import Counter
+
+
+def _compute_source_diversity(evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute source diversity metadata from evidence list."""
+    domains = [e.get("source_domain", "unknown") for e in evidence]
+    dist = dict(Counter(domains))
+    total = len(evidence)
+    max_conc = max(dist.values()) / total if total > 0 else 0.0
+    return {
+        "unique_domains": len(dist),
+        "domain_distribution": dist,
+        "max_domain_concentration": round(max_conc, 4),
+        "total_evidence": total,
+    }
+
+
+async def _run_pipeline(english_claim: str) -> dict[str, Any]:
+    """
+    Core verification pipeline for an English-normalised claim.
+    Returns a dict matching VerifyResponse fields (minus language wrappers).
+    """
+    # Stage 1 – Tavily web retrieval
+    logger.info("Stage 1: Tavily retrieval for claim: %r", english_claim[:80])
+    try:
+        raw_evidence = await asyncio.to_thread(search_evidence, english_claim, 15)
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Web search failed: {exc}") from exc
+
+    if not raw_evidence:
+        raise HTTPException(status_code=404, detail="No evidence found for the given claim.")
+
+    # Stage 2 – BGE semantic ranking
+    logger.info("Stage 2: BGE semantic ranking (%d results)", len(raw_evidence))
+    try:
+        ranked = await asyncio.to_thread(rank_results, english_claim, raw_evidence)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Semantic ranking failed: {exc}") from exc
+
+    # Stage 3+4 – Source reliability + evidence analysis
+    logger.info("Stage 3+4: Source reliability scoring and evidence analysis")
+    try:
+        enriched = await asyncio.to_thread(analyze_evidence, english_claim, ranked)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Evidence analysis failed: {exc}") from exc
+
+    if not enriched:
+        raise HTTPException(status_code=404, detail="No usable evidence survived analysis.")
+
+    # Stage 5 – Gemini grounded verdict
+    logger.info("Stage 5: Gemini verdict generation")
+    try:
+        # Wrap Gemini call with a sensible 25-second timeout
+        verdict_result = await asyncio.wait_for(
+            asyncio.to_thread(generate_verdict, english_claim, enriched),
+            timeout=25.0
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Gemini analysis timed out.") from exc
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Verdict generation failed: {exc}") from exc
+
+    # Stage 8 – Knowledge graph
+    logger.info("Stage 8: Building knowledge graph")
+    try:
+        graph = await asyncio.to_thread(
+            build_graph,
+            english_claim,
+            verdict_result["verdict"],
+            verdict_result["evidence"]
+        )
+    except Exception as exc:
+        logger.warning("Knowledge graph generation failed (non-fatal): %s", exc)
+        graph = {"nodes": [], "edges": []}
+
+    # Compute source diversity metadata
+    diversity = _compute_source_diversity(verdict_result["evidence"])
+
+    return {
+        "verdict":                verdict_result["verdict"],
+        "analysis_confidence":    verdict_result["analysis_confidence"],
+        "summary":                verdict_result["summary"],
+        "reasoning":              verdict_result["reasoning"],
+        "evidence":               verdict_result["evidence"],
+        "knowledge_graph":        graph,
+        "limitations":            verdict_result["limitations"],
+        "source_diversity":       diversity,
+    }
+
+
+# ── POST /verify (text claim) ─────────────────────────────────────────────────
+
+@router.post("/verify", response_model=VerifyResponse, tags=["Verification"])
+async def verify_claim(body: VerifyRequest) -> VerifyResponse:
+    """
+    Full verification pipeline for a text claim.
+
+    - Detects language and translates to English if needed.
+    - Retrieves web evidence via Tavily.
+    - Ranks evidence by BGE semantic similarity.
+    - Scores source reliability.
+    - Generates a grounded verdict via Gemini.
+    - Returns structured evidence + knowledge graph.
+
+    **analysis_confidence** is NOT a truth probability — it reflects the
+    model's confidence in its analysis given the supplied evidence.
+    """
+    # Stage 7 – Language detection + normalisation
+    logger.info("POST /verify — claim: %r", body.claim[:80])
+    try:
+        lang_info = normalize_claim(body.claim)
+    except Exception as exc:
+        logger.warning("Language normalisation failed: %s — using original claim", exc)
+        lang_info = {
+            "original_claim": body.claim,
+            "normalized_claim": body.claim,
+            "language": "en",
+        }
+
+    english_claim = lang_info["normalized_claim"]
+    detected_lang = lang_info["language"]
+
+    pipeline = await _run_pipeline(english_claim)
+
+    # Translate summary/reasoning back to detected language if not English
+    summary = pipeline["summary"]
+    reasoning = pipeline["reasoning"]
+    if detected_lang not in ("en", "en-US", "en-GB"):
+        try:
+            # Run both translations concurrently with a timeout
+            summary, reasoning = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(translate_from_english, summary, detected_lang),
+                    asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                ),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Back-translation timed out — returning English response")
+        except Exception as exc:
+            logger.warning("Back-translation failed: %s — returning English response", exc)
+
+    return VerifyResponse(
+        original_claim=body.claim,
+        normalized_claim=english_claim,
+        language=detected_lang,
+        verdict=pipeline["verdict"],
+        analysis_confidence=pipeline["analysis_confidence"],
+        summary=summary,
+        reasoning=reasoning,
+        evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
+        knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
+        limitations=pipeline["limitations"],
+        source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]),
+    )
+
+
+# ── POST /verify/image (OCR claim) ────────────────────────────────────────────
+
+@router.post("/verify/image", response_model=VerifyResponse, tags=["Verification"])
+async def verify_image(
+    image: UploadFile = File(..., description="Image file (PNG/JPG/JPEG/WEBP)"),
+) -> VerifyResponse:
+    """
+    Extract a claim from an uploaded image via OCR, then run the full
+    verification pipeline.
+
+    Supported formats: PNG, JPG, JPEG, WEBP.
+    Returns 422 if no text is detected in the image.
+    """
+    logger.info("POST /verify/image — file: %r", image.filename)
+
+    # Late import so EasyOCR is only loaded if this endpoint is actually used.
+    from app.services.ocr_service import extract_text_from_image
+
+    try:
+        image_bytes = await image.read()
+        extracted_text = extract_text_from_image(image_bytes, image.filename or "upload")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Stage 7 – Language detection on OCR text
+    try:
+        lang_info = normalize_claim(extracted_text)
+    except Exception as exc:
+        logger.warning("Language normalisation on OCR text failed: %s", exc)
+        lang_info = {
+            "original_claim": extracted_text,
+            "normalized_claim": extracted_text,
+            "language": "en",
+        }
+
+    english_claim = lang_info["normalized_claim"]
+    detected_lang = lang_info["language"]
+
+    pipeline = await _run_pipeline(english_claim)
+
+    summary = pipeline["summary"]
+    reasoning = pipeline["reasoning"]
+    if detected_lang not in ("en", "en-US", "en-GB"):
+        try:
+            summary, reasoning = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(translate_from_english, summary, detected_lang),
+                    asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                ),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Back-translation timed out — returning English response")
+        except Exception as exc:
+            logger.warning("Back-translation failed: %s", exc)
+
+    return VerifyResponse(
+        original_claim=extracted_text,
+        normalized_claim=english_claim,
+        language=detected_lang,
+        verdict=pipeline["verdict"],
+        analysis_confidence=pipeline["analysis_confidence"],
+        summary=summary,
+        reasoning=reasoning,
+        evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
+        knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
+        limitations=pipeline["limitations"],
+        source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]),
+    )
+
+
+# ── POST /verify/image/ai-detect (AI image generation detector) ───────────────
+
+@router.post("/verify/image/ai-detect", response_model=AIImageDetectResponse, tags=["Verification"])
+async def detect_ai_generated_image(
+    image: UploadFile = File(..., description="Image file (PNG/JPG/JPEG/WEBP)"),
+) -> AIImageDetectResponse:
+    """
+    Analyse an uploaded image to determine whether it was AI-generated.
+
+    Uses Gemini vision to check for AI-generation artefacts (distorted anatomy,
+    unnatural textures, hallucinated text, etc.).
+
+    Returns:
+        verdict:    AI_GENERATED | AUTHENTIC | UNCERTAIN
+        confidence: Gemini's confidence in the verdict (0.0–1.0)
+        summary:    Plain-language explanation
+        indicators: List of detected AI-generation indicators
+        limitations: Caveats about the analysis
+    """
+    logger.info("POST /verify/image/ai-detect — file: %r", image.filename)
+
+    try:
+        image_bytes = await image.read()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read image: {exc}") from exc
+
+    try:
+        result = await asyncio.to_thread(
+            detect_ai_image, image_bytes, image.filename or "upload.jpg"
+        )
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return AIImageDetectResponse(**result)
+

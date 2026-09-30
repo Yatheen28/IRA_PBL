@@ -1,0 +1,16 @@
+cd "c:\Users\Harshith shetty\Documents\Harshith\Projects\IRA_PBL\IRA_PBL\backend"
+
+# Activate the virtual environment
+.\.venv\Scripts\Activate.ps1
+
+# Fix Windows Unicode encoding (required on Windows!)
+$env:PYTHONUTF8 = "1"
+
+# Start the backend server
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+
+
+
+cd "c:\Users\Harshith shetty\Documents\Harshith\Projects\IRA_PBL\IRA_PBL\frontend"
+npm run dev
