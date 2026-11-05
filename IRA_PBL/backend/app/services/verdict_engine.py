@@ -29,9 +29,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ── Model configuration ────────────────────────────────────────────────────────
-_GEMINI_MODEL = "gemini-3.5-flash"          # Primary model (verified available)
+_GEMINI_MODEL = "gemini-3.1-flash-lite"          # Primary model (fast & verified 200 OK)
 # Fallback chain: tried in order if the primary hits quota/errors
-_GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash"]
+_GEMINI_FALLBACK_MODELS = ["gemini-flash-latest", "gemini-3-flash-preview"]
 _MAX_EVIDENCE_ITEMS = 5              # Top-N items sent to Gemini
 _MAX_CONTENT_CHARS = 800            # Truncate long content to keep prompt manageable
 

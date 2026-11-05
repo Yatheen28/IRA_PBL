@@ -14,9 +14,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, field_validator
+from sqlalchemy.orm import Session
 
+from app.db.session import get_db, SessionLocal
 from app.services.web_retriever import search_evidence
 from app.services.semantic_ranker import rank_results
 from app.services.evidence_analyzer import analyze_evidence
@@ -24,6 +26,15 @@ from app.services.verdict_engine import generate_verdict
 from app.services.language_service import normalize_claim, translate_from_english
 from app.services.knowledge_graph import build_graph
 from app.services.ai_image_detector import detect_ai_image
+from app.services.verification_cache import (
+    lookup_cache,
+    store_cache,
+    acquire_coalesce_lock,
+    release_coalesce_lock,
+    make_cache_key,
+    get_cache_stats,
+    clear_cache,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,6 +44,7 @@ router = APIRouter()
 
 class VerifyRequest(BaseModel):
     claim: str
+    force_refresh: bool = False
 
     @field_validator("claim")
     @classmethod
@@ -81,6 +93,16 @@ class SourceDiversityMeta(BaseModel):
     total_evidence: int
 
 
+class CacheMeta(BaseModel):
+    cached: bool = False
+    cache_key: str | None = None
+    cached_at: str | None = None
+    expires_at: str | None = None
+    ttl_remaining_seconds: int | None = None
+    hit_count: int = 0
+    pipeline_version: str = "3.0.0"
+
+
 class VerifyResponse(BaseModel):
     original_claim: str
     normalized_claim: str
@@ -93,6 +115,7 @@ class VerifyResponse(BaseModel):
     knowledge_graph: KnowledgeGraphData
     limitations: list[str]
     source_diversity: SourceDiversityMeta | None = None
+    cache_metadata: CacheMeta | None = None
 
 
 class AIImageDetectResponse(BaseModel):
@@ -200,144 +223,278 @@ async def _run_pipeline(english_claim: str) -> dict[str, Any]:
     }
 
 
+async def _get_or_execute_pipeline(
+    raw_claim: str,
+    english_claim: str,
+    detected_lang: str,
+    db: Session,
+    mode: str = "standard",
+    force_refresh: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """
+    Look up cache or execute verification pipeline with single-flight request coalescing.
+    Returns (pipeline_dict, cache_metadata_dict).
+    """
+    # 1. Tier 2 lookup check (normalized claim key)
+    cached, hit_tier = lookup_cache(
+        db,
+        raw_claim=raw_claim,
+        normalized_claim=english_claim,
+        mode=mode,
+        force_refresh=force_refresh,
+    )
+    if cached:
+        return cached, cached.get("cache_metadata")
+
+    # 2. Acquire lock for single-flight request coalescing
+    cache_key = make_cache_key(english_claim, mode=mode, prefix="norm")
+    lock, is_coalesced = await acquire_coalesce_lock(cache_key)
+
+    try:
+        # If another concurrent request just finished, re-check the cache
+        if is_coalesced and not force_refresh:
+            cached_again, status = lookup_cache(
+                db,
+                raw_claim=raw_claim,
+                normalized_claim=english_claim,
+                mode=mode,
+                force_refresh=False,
+            )
+            if cached_again:
+                logger.info("Coalesced duplicate request hit freshly cached verdict for key: %s", cache_key[:12])
+                return cached_again, cached_again.get("cache_metadata")
+
+        # 3. Cache Miss: Execute full 7-stage verification pipeline
+        pipeline_result = await _run_pipeline(english_claim)
+
+        # 4. Store in cache only on successful completion
+        store_cache(
+            db,
+            raw_claim=raw_claim,
+            normalized_claim=english_claim,
+            language=detected_lang,
+            pipeline_result=pipeline_result,
+            mode=mode,
+        )
+
+        cache_meta = {
+            "cached": False,
+            "cache_key": cache_key,
+            "hit_count": 0,
+            "pipeline_version": "3.0.0",
+        }
+        return pipeline_result, cache_meta
+
+    finally:
+        await release_coalesce_lock(cache_key, lock)
+
+
 # ── POST /verify (text claim) ─────────────────────────────────────────────────
 
 @router.post("/verify", response_model=VerifyResponse, tags=["Verification"])
-async def verify_claim(body: VerifyRequest) -> VerifyResponse:
+async def verify_claim(
+    body: VerifyRequest,
+    force_refresh: bool = False,
+    db: Session | None = Depends(get_db),
+) -> VerifyResponse:
     """
-    Full verification pipeline for a text claim.
+    Full verification pipeline for a text claim with 2-tier persistent memory.
 
-    - Detects language and translates to English if needed.
-    - Retrieves web evidence via Tavily.
-    - Ranks evidence by BGE semantic similarity.
-    - Scores source reliability.
-    - Generates a grounded verdict via Gemini.
-    - Returns structured evidence + knowledge graph.
-
-    **analysis_confidence** is NOT a truth probability — it reflects the
-    model's confidence in its analysis given the supplied evidence.
+    - Tier 1: Fast raw key lookup (<5ms).
+    - Tier 2: Normalized semantic key lookup.
+    - Single-flight concurrency locking prevents redundant API requests.
+    - Preserves exact response schema for web & mobile clients.
     """
-    # Stage 7 – Language detection + normalisation
-    logger.info("POST /verify — claim: %r", body.claim[:80])
+    should_close_db = False
+    if db is None or not isinstance(db, Session):
+        db = SessionLocal()
+        should_close_db = True
+
     try:
-        lang_info = normalize_claim(body.claim)
-    except Exception as exc:
-        logger.warning("Language normalisation failed: %s — using original claim", exc)
-        lang_info = {
-            "original_claim": body.claim,
-            "normalized_claim": body.claim,
-            "language": "en",
-        }
+        effective_force = bool(getattr(body, "force_refresh", False)) or (
+            isinstance(force_refresh, bool) and force_refresh
+        )
 
-    english_claim = lang_info["normalized_claim"]
-    detected_lang = lang_info["language"]
-
-    pipeline = await _run_pipeline(english_claim)
-
-    # Translate summary/reasoning back to detected language if not English
-    summary = pipeline["summary"]
-    reasoning = pipeline["reasoning"]
-    if detected_lang not in ("en", "en-US", "en-GB"):
-        try:
-            # Run both translations concurrently with a timeout
-            summary, reasoning = await asyncio.wait_for(
-                asyncio.gather(
-                    asyncio.to_thread(translate_from_english, summary, detected_lang),
-                    asyncio.to_thread(translate_from_english, reasoning, detected_lang)
-                ),
-                timeout=10.0
+        # Tier 1 fast check (bypasses language normalization if exact raw claim was already verified)
+        if not effective_force:
+            tier1_cached, hit_tier = lookup_cache(
+                db,
+                raw_claim=body.claim,
+                mode="standard",
+                force_refresh=False,
             )
-        except asyncio.TimeoutError:
-            logger.warning("Back-translation timed out — returning English response")
+            if tier1_cached:
+                return VerifyResponse(
+                    original_claim=tier1_cached["original_claim"],
+                    normalized_claim=tier1_cached["normalized_claim"],
+                    language=tier1_cached["language"],
+                    verdict=tier1_cached["verdict"],
+                    analysis_confidence=tier1_cached["analysis_confidence"],
+                    summary=tier1_cached["summary"],
+                    reasoning=tier1_cached["reasoning"],
+                    evidence=[EvidenceItem(**e) for e in tier1_cached["evidence"]],
+                    knowledge_graph=KnowledgeGraphData(**tier1_cached["knowledge_graph"]),
+                    limitations=tier1_cached["limitations"],
+                    source_diversity=SourceDiversityMeta(**tier1_cached["source_diversity"]) if tier1_cached.get("source_diversity") else None,
+                    cache_metadata=CacheMeta(**tier1_cached["cache_metadata"]) if tier1_cached.get("cache_metadata") else None,
+                )
+
+        # Stage 7 – Language detection + normalisation
+        logger.info("POST /verify — claim: %r (force_refresh=%s)", body.claim[:80], effective_force)
+        try:
+            lang_info = normalize_claim(body.claim)
         except Exception as exc:
-            logger.warning("Back-translation failed: %s — returning English response", exc)
+            logger.warning("Language normalisation failed: %s — using original claim", exc)
+            lang_info = {
+                "original_claim": body.claim,
+                "normalized_claim": body.claim,
+                "language": "en",
+            }
 
-    return VerifyResponse(
-        original_claim=body.claim,
-        normalized_claim=english_claim,
-        language=detected_lang,
-        verdict=pipeline["verdict"],
-        analysis_confidence=pipeline["analysis_confidence"],
-        summary=summary,
-        reasoning=reasoning,
-        evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
-        knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
-        limitations=pipeline["limitations"],
-        source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]),
-    )
+        english_claim = lang_info["normalized_claim"]
+        detected_lang = lang_info["language"]
+
+        pipeline, cache_meta = await _get_or_execute_pipeline(
+            raw_claim=body.claim,
+            english_claim=english_claim,
+            detected_lang=detected_lang,
+            db=db,
+            mode="standard",
+            force_refresh=effective_force,
+        )
+
+        # Translate summary/reasoning back to detected language if non-English and freshly generated
+        summary = pipeline["summary"]
+        reasoning = pipeline["reasoning"]
+        is_cached = cache_meta and cache_meta.get("cached", False)
+        if detected_lang not in ("en", "en-US", "en-GB") and not is_cached:
+            try:
+                summary, reasoning = await asyncio.wait_for(
+                    asyncio.gather(
+                        asyncio.to_thread(translate_from_english, summary, detected_lang),
+                        asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                    ),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Back-translation timed out — returning English response")
+            except Exception as exc:
+                logger.warning("Back-translation failed: %s — returning English response", exc)
+
+        return VerifyResponse(
+            original_claim=body.claim,
+            normalized_claim=english_claim,
+            language=detected_lang,
+            verdict=pipeline["verdict"],
+            analysis_confidence=pipeline["analysis_confidence"],
+            summary=summary,
+            reasoning=reasoning,
+            evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
+            knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
+            limitations=pipeline["limitations"],
+            source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]) if pipeline.get("source_diversity") else None,
+            cache_metadata=CacheMeta(**cache_meta) if cache_meta else None,
+        )
+    finally:
+        if should_close_db:
+            db.close()
 
 
-# ── POST /verify/image (OCR claim) ────────────────────────────────────────────
+# ── POST /verify/image (Multimodal OCR & Visual claim) ─────────────────────────
 
 @router.post("/verify/image", response_model=VerifyResponse, tags=["Verification"])
 async def verify_image(
     image: UploadFile = File(..., description="Image file (PNG/JPG/JPEG/WEBP)"),
+    caption: str | None = Form(None, description="Optional accompanying caption or user text"),
+    force_refresh: bool = False,
+    db: Session | None = Depends(get_db),
 ) -> VerifyResponse:
     """
-    Extract a claim from an uploaded image via OCR, then run the full
-    verification pipeline.
-
-    Supported formats: PNG, JPG, JPEG, WEBP.
-    Returns 422 if no text is detected in the image.
+    Extract a factual claim from an uploaded image (and optional caption) via
+    Gemini Multimodal Vision + EasyOCR fallback, then verify with persistent memory.
     """
-    logger.info("POST /verify/image — file: %r", image.filename)
+    effective_force = isinstance(force_refresh, bool) and force_refresh
+    logger.info("POST /verify/image — file: %r, caption: %r (force_refresh=%s)", image.filename, caption, effective_force)
 
-    # Late import so EasyOCR is only loaded if this endpoint is actually used.
-    from app.services.ocr_service import extract_text_from_image
+    should_close_db = False
+    if db is None or not isinstance(db, Session):
+        db = SessionLocal()
+        should_close_db = True
 
     try:
-        image_bytes = await image.read()
-        extracted_text = extract_text_from_image(image_bytes, image.filename or "upload")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        from app.services.ocr_service import extract_claim_from_image_and_caption
 
-    # Stage 7 – Language detection on OCR text
-    try:
-        lang_info = normalize_claim(extracted_text)
-    except Exception as exc:
-        logger.warning("Language normalisation on OCR text failed: %s", exc)
-        lang_info = {
-            "original_claim": extracted_text,
-            "normalized_claim": extracted_text,
-            "language": "en",
-        }
-
-    english_claim = lang_info["normalized_claim"]
-    detected_lang = lang_info["language"]
-
-    pipeline = await _run_pipeline(english_claim)
-
-    summary = pipeline["summary"]
-    reasoning = pipeline["reasoning"]
-    if detected_lang not in ("en", "en-US", "en-GB"):
         try:
-            summary, reasoning = await asyncio.wait_for(
-                asyncio.gather(
-                    asyncio.to_thread(translate_from_english, summary, detected_lang),
-                    asyncio.to_thread(translate_from_english, reasoning, detected_lang)
-                ),
-                timeout=10.0
+            image_bytes = await image.read()
+            extracted_data = await asyncio.to_thread(
+                extract_claim_from_image_and_caption, image_bytes, caption, image.filename or "upload"
             )
-        except asyncio.TimeoutError:
-            logger.warning("Back-translation timed out — returning English response")
         except Exception as exc:
-            logger.warning("Back-translation failed: %s", exc)
+            raise HTTPException(status_code=422, detail=f"Image processing failed: {exc}") from exc
 
-    return VerifyResponse(
-        original_claim=extracted_text,
-        normalized_claim=english_claim,
-        language=detected_lang,
-        verdict=pipeline["verdict"],
-        analysis_confidence=pipeline["analysis_confidence"],
-        summary=summary,
-        reasoning=reasoning,
-        evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
-        knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
-        limitations=pipeline["limitations"],
-        source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]),
-    )
+        english_claim = extracted_data["claim"]
+        detected_lang = extracted_data["language"]
+        original_text = extracted_data["original_text"] or english_claim
+
+        pipeline, cache_meta = await _get_or_execute_pipeline(
+            raw_claim=original_text,
+            english_claim=english_claim,
+            detected_lang=detected_lang,
+            db=db,
+            mode="ocr",
+            force_refresh=force_refresh,
+        )
+
+        summary = pipeline["summary"]
+        reasoning = pipeline["reasoning"]
+        is_cached = cache_meta and cache_meta.get("cached", False)
+        if detected_lang not in ("en", "en-US", "en-GB") and not is_cached:
+            try:
+                summary, reasoning = await asyncio.wait_for(
+                    asyncio.gather(
+                        asyncio.to_thread(translate_from_english, summary, detected_lang),
+                        asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                    ),
+                    timeout=10.0
+                )
+            except Exception as exc:
+                logger.warning("Back-translation failed: %s", exc)
+
+        return VerifyResponse(
+            original_claim=original_text,
+            normalized_claim=english_claim,
+            language=detected_lang,
+            verdict=pipeline["verdict"],
+            analysis_confidence=pipeline["analysis_confidence"],
+            summary=summary,
+            reasoning=reasoning,
+            evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
+            knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
+            limitations=pipeline["limitations"],
+            source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]) if pipeline.get("source_diversity") else None,
+            cache_metadata=CacheMeta(**cache_meta) if cache_meta else None,
+        )
+    finally:
+        if should_close_db:
+            db.close()
+
+
+# ── Cache Observability & Management Endpoints ────────────────────────────────
+
+@router.get("/verify/cache/stats", tags=["Verification"])
+async def get_verification_cache_telemetry(db: Session = Depends(get_db)):
+    """Retrieve cache hit/miss statistics, active entries, and storage status."""
+    return get_cache_stats(db)
+
+
+@router.post("/verify/cache/clear", tags=["Verification"])
+async def clear_verification_cache_records(
+    expired_only: bool = Query(False, description="If true, only deletes expired cache entries"),
+    db: Session = Depends(get_db),
+):
+    """Safely clear verification cache entries (all or expired only)."""
+    count = clear_cache(db, expired_only=expired_only)
+    return {"ok": True, "cleared_count": count, "expired_only": expired_only}
 
 
 # ── POST /verify/image/ai-detect (AI image generation detector) ───────────────

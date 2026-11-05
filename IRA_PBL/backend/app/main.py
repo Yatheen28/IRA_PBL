@@ -8,8 +8,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import ValidationError
+import os
 
 from app.routes.verify import router as verify_router
 from app.routes.chat import router as chat_router
@@ -63,7 +64,7 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -89,4 +90,22 @@ async def root():
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "0.3.0"}
+
+
+@app.get("/download-apk", tags=["App"])
+async def download_apk():
+    # Prefer release APK, fallback to debug APK
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../android-chat/app/build/outputs/apk"))
+    rel_path = os.path.join(base_dir, "release", "app-release.apk")
+    dbg_path = os.path.join(base_dir, "debug", "app-debug.apk")
+    
+    apk_path = rel_path if os.path.exists(rel_path) else dbg_path
+    if not os.path.exists(apk_path):
+        return JSONResponse(status_code=404, content={"detail": "APK file not found on server"})
+    
+    return FileResponse(
+        path=apk_path,
+        filename="vajra-chat.apk",
+        media_type="application/vnd.android.package-archive"
+    )

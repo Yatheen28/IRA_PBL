@@ -56,6 +56,9 @@ class MessageCreate(BaseModel):
     text: str
     replyToId: Optional[str] = None
 
+class MessageForward(BaseModel):
+    toConversationId: str
+
 class MessageResponse(BaseModel):
     id: str
     conversationId: str
@@ -481,6 +484,27 @@ async def send_image_message(
 
 # ── GET /chat/messages/{id}/image ─────────────────────────────────────────────
 
+def _resolve_image_path(image_data) -> str | None:
+    if not image_data:
+        return None
+    if isinstance(image_data, str):
+        import json
+        try:
+            image_data = json.loads(image_data)
+        except Exception:
+            return None
+    path = image_data.get("path")
+    if not path:
+        return None
+    if os.path.exists(path):
+        return path
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    candidate = os.path.join(base_dir, path)
+    if os.path.exists(candidate):
+        return candidate
+    return None
+
+
 @router.get("/messages/{message_id}/image")
 async def get_message_image(
     message_id: str,
@@ -498,11 +522,153 @@ async def get_message_image(
     if not convo or not any(p.id == user.id for p in convo.participants):
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    filepath = msg.image_data.get("path")
-    if not filepath or not os.path.exists(filepath):
+    filepath = _resolve_image_path(msg.image_data)
+    if not filepath:
         raise HTTPException(status_code=404, detail="Image file missing")
         
     return FileResponse(filepath)
+
+
+# ── POST /chat/messages/{id}/verify ───────────────────────────────────────────
+
+@router.post("/messages/{message_id}/verify")
+async def verify_chat_message(
+    message_id: str,
+    request: Request,
+    mode: str = Query("ocr", description="'ocr' for claim fact-check or 'ai_detect' for AI generation detection"),
+    db: Session = Depends(get_db),
+):
+    """
+    Verify a chat message directly on the backend using its stored image and text caption.
+    Avoids client re-uploading the image.
+    """
+    user = await _auth_from_request(request, db)
+    msg = db.query(Message).filter(Message.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    convo = db.query(Conversation).filter(Conversation.id == msg.conversation_id).first()
+    if not convo or not any(p.id == user.id for p in convo.participants):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if (msg.kind == "image" or msg.image_data) and msg.image_data:
+        filepath = _resolve_image_path(msg.image_data)
+        if not filepath:
+            raise HTTPException(status_code=404, detail="Image file missing on server")
+
+        with open(filepath, "rb") as f:
+            image_bytes = f.read()
+
+        img_info = msg.image_data
+        if isinstance(img_info, str):
+            import json
+            try:
+                img_info = json.loads(img_info)
+            except Exception:
+                img_info = {}
+        img_name = img_info.get("name", "upload.jpg") if isinstance(img_info, dict) else "upload.jpg"
+
+        if mode == "ai_detect":
+            from app.services.ai_image_detector import detect_ai_image
+            result = await asyncio.to_thread(detect_ai_image, image_bytes, img_name)
+            return result
+        else:
+            from app.services.ocr_service import extract_claim_from_image_and_caption
+            from app.routes.verify import _get_or_execute_pipeline, EvidenceItem, KnowledgeGraphData, SourceDiversityMeta, VerifyResponse, CacheMeta
+            from app.services.language_service import translate_from_english
+
+            extracted_data = await asyncio.to_thread(
+                extract_claim_from_image_and_caption, image_bytes, msg.text, img_name
+            )
+            english_claim = extracted_data["claim"]
+            detected_lang = extracted_data["language"]
+            orig_text = extracted_data["original_text"] or english_claim
+
+            pipeline, cache_meta = await _get_or_execute_pipeline(
+                raw_claim=orig_text,
+                english_claim=english_claim,
+                detected_lang=detected_lang,
+                db=db,
+                mode="ocr",
+                force_refresh=False,
+            )
+
+            summary = pipeline["summary"]
+            reasoning = pipeline["reasoning"]
+            is_cached = cache_meta and cache_meta.get("cached", False)
+            if detected_lang not in ("en", "en-US", "en-GB") and not is_cached:
+                try:
+                    summary, reasoning = await asyncio.wait_for(
+                        asyncio.gather(
+                            asyncio.to_thread(translate_from_english, summary, detected_lang),
+                            asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                        ),
+                        timeout=10.0
+                    )
+                except Exception as exc:
+                    logger.warning("Back-translation failed: %s", exc)
+
+            return VerifyResponse(
+                original_claim=orig_text,
+                normalized_claim=english_claim,
+                language=detected_lang,
+                verdict=pipeline["verdict"],
+                analysis_confidence=pipeline["analysis_confidence"],
+                summary=summary,
+                reasoning=reasoning,
+                evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
+                knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
+                limitations=pipeline["limitations"],
+                source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]) if pipeline.get("source_diversity") else None,
+                cache_metadata=CacheMeta(**cache_meta) if cache_meta else None,
+            )
+    else:
+        # Text message verification
+        from app.routes.verify import _get_or_execute_pipeline, EvidenceItem, KnowledgeGraphData, SourceDiversityMeta, VerifyResponse, CacheMeta
+        from app.services.language_service import normalize_claim, translate_from_english
+
+        lang_info = normalize_claim(msg.text)
+        english_claim = lang_info["normalized_claim"]
+        detected_lang = lang_info["language"]
+
+        pipeline, cache_meta = await _get_or_execute_pipeline(
+            raw_claim=msg.text,
+            english_claim=english_claim,
+            detected_lang=detected_lang,
+            db=db,
+            mode="standard",
+            force_refresh=False,
+        )
+
+        summary = pipeline["summary"]
+        reasoning = pipeline["reasoning"]
+        is_cached = cache_meta and cache_meta.get("cached", False)
+        if detected_lang not in ("en", "en-US", "en-GB") and not is_cached:
+            try:
+                summary, reasoning = await asyncio.wait_for(
+                    asyncio.gather(
+                        asyncio.to_thread(translate_from_english, summary, detected_lang),
+                        asyncio.to_thread(translate_from_english, reasoning, detected_lang)
+                    ),
+                    timeout=10.0
+                )
+            except Exception as exc:
+                logger.warning("Back-translation failed: %s", exc)
+
+        return VerifyResponse(
+            original_claim=msg.text,
+            normalized_claim=english_claim,
+            language=detected_lang,
+            verdict=pipeline["verdict"],
+            analysis_confidence=pipeline["analysis_confidence"],
+            summary=summary,
+            reasoning=reasoning,
+            evidence=[EvidenceItem(**e) for e in pipeline["evidence"]],
+            knowledge_graph=KnowledgeGraphData(**pipeline["knowledge_graph"]),
+            limitations=pipeline["limitations"],
+            source_diversity=SourceDiversityMeta(**pipeline["source_diversity"]) if pipeline.get("source_diversity") else None,
+            cache_metadata=CacheMeta(**cache_meta) if cache_meta else None,
+        )
 
 
 # ── DELETE /chat/conversations/{id}/messages/{msg_id} ─────────────────────────
@@ -559,6 +725,66 @@ async def mark_read(
     ).update({"status": "read"})
     db.commit()
     return {"ok": True}
+
+
+# ── POST /chat/messages/{id}/forward ─────────────────────────────────────────
+
+@router.post("/messages/{message_id}/forward")
+async def forward_message(
+    message_id: str,
+    body: MessageForward,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Forward an existing message to another conversation."""
+    user = await _auth_from_request(request, db)
+
+    # 1. Verify original message exists and user has access to its conversation
+    orig_msg = db.query(Message).filter(Message.id == message_id).first()
+    if not orig_msg or orig_msg.deleted == "true":
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    src_convo = db.query(Conversation).filter(Conversation.id == orig_msg.conversation_id).first()
+    if not src_convo or not any(p.id == user.id for p in src_convo.participants):
+        raise HTTPException(status_code=403, detail="Not authorized to access original message")
+
+    # 2. Verify target conversation exists and user is a participant
+    dest_convo = db.query(Conversation).filter(Conversation.id == body.toConversationId).first()
+    if not dest_convo:
+        raise HTTPException(status_code=404, detail="Destination conversation not found")
+    if not any(p.id == user.id for p in dest_convo.participants):
+        raise HTTPException(status_code=403, detail="Not a participant in destination conversation")
+
+    # 3. Create cloned message in destination conversation
+    new_msg = Message(
+        id=str(uuid.uuid4()),
+        conversation_id=dest_convo.id,
+        sender_id=user.id,
+        text=orig_msg.text or "",
+        kind=orig_msg.kind,
+        status="sent",
+        created_at=datetime.now(timezone.utc),
+        image_data=orig_msg.image_data,
+    )
+    db.add(new_msg)
+    dest_convo.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(new_msg)
+
+    formatted = _format_message(new_msg)
+
+    # 4. Broadcast to all destination participants
+    for participant in dest_convo.participants:
+        await _broadcast(participant.id, {
+            "type": "message:new",
+            "conversationId": dest_convo.id,
+            "message": formatted,
+        })
+
+    new_msg.status = "delivered"
+    db.commit()
+
+    return formatted
 
 
 # ── Message formatting helper ─────────────────────────────────────────────────

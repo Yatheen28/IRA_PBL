@@ -17,6 +17,7 @@ from typing import Any
 
 from app.services.source_reliability import score_source
 from app.services.bm25_ranker import rank_bm25, reciprocal_rank_fusion
+import re
 import urllib.request
 import urllib.error
 
@@ -71,20 +72,84 @@ def _deduplicate_by_url(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+# Cache to prevent repeated Jina Reader network calls for the same URL within the process
+_jina_url_cache: dict[str, str] = {}
+
+# Non-HTML extensions that should not be fetched via Jina Reader
+NON_HTML_EXTENSIONS = (
+    ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg",
+    ".mp4", ".mp3", ".wav", ".avi", ".mov", ".zip", ".tar", ".gz",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"
+)
+
+# Potential prompt injection signatures to neutralize in retrieved third-party text
+INJECTION_PATTERNS = re.compile(
+    r"(ignore\s+all\s+previous\s+instructions|system\s+prompt|system\s+instructions|disregard\s+prior|you\s+must\s+say\s+true|you\s+must\s+say\s+false)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_untrusted_content(text: str) -> str:
+    """Neutralize potential prompt injection attempts from untrusted web pages."""
+    if not text:
+        return ""
+    # Defuse common prompt injection instructions by masking
+    def _mask_injection(match):
+        logger.warning("Neutralized potential prompt injection pattern: %r", match.group(0))
+        return f"[UNTRUSTED INSTRUCTION FILTERED: {match.group(0)[:15]}...]"
+
+    return INJECTION_PATTERNS.sub(_mask_injection, text)
+
+
 def _deep_fetch_content(url: str, original_content: str) -> str:
-    """Use Jina Reader (Agent-Reach Web channel) to deep-fetch page markdown."""
+    """
+    Use Jina Reader (Agent-Reach Web capability) to deep-fetch clean page markdown.
+    Hardened with:
+    - Binary file extension filtering
+    - In-memory URL cache
+    - Strict 2.5s socket timeout
+    - Untrusted prompt injection neutralization
+    - Safe fallback to original search snippet
+    """
+    if not url or not url.startswith(("http://", "https://")):
+        return original_content
+
+    # Skip non-HTML files
+    parsed_path = urlparse(url).path.lower()
+    if any(parsed_path.endswith(ext) for ext in NON_HTML_EXTENSIONS):
+        logger.debug("Skipping Jina Reader for non-HTML URL: %s", url)
+        return original_content
+
+    # Check process-level cache
+    if url in _jina_url_cache:
+        return _jina_url_cache[url]
+
     try:
         jina_url = f"https://r.jina.ai/{url}"
-        req = urllib.request.Request(jina_url, headers={'User-Agent': 'Vajra-AI-Agent'})
-        with urllib.request.urlopen(req, timeout=3.0) as response:
-            content = response.read().decode('utf-8')
-            # Extract first 500 chars to avoid prompt bloat
-            clean = content.strip()
-            if len(clean) > 50:
-                logger.info("Agent-Reach (Jina Reader) enriched content for: %s", url)
-                return clean[:500] + "..."
+        req = urllib.request.Request(
+            jina_url,
+            headers={
+                "User-Agent": "Vajra-AI-Verification-Agent/3.0",
+                "Accept": "text/plain, text/markdown",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=2.5) as response:
+            if response.status == 200:
+                content = response.read().decode("utf-8", errors="replace")
+                clean = content.strip()
+                if len(clean) > 50:
+                    # Sanitize untrusted web content
+                    safe_clean = _sanitize_untrusted_content(clean)
+                    enriched = safe_clean[:500].strip() + "..."
+                    _jina_url_cache[url] = enriched
+                    logger.info("Jina Reader enriched content for: %s (%d chars)", url, len(enriched))
+                    return enriched
+    except urllib.error.HTTPError as http_err:
+        logger.debug("Jina Reader HTTP %d for %s — using original snippet", http_err.code, url)
     except Exception as exc:
-        logger.warning("Jina Reader deep-fetch failed for %s: %s", url, exc)
+        logger.debug("Jina Reader deep-fetch bypassed for %s: %s", url, exc)
+
+    _jina_url_cache[url] = original_content
     return original_content
 
 

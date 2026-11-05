@@ -1,373 +1,329 @@
-# VAJRA AI 🔍
-### *Cross-Platform Multilingual Misinformation Knowledge Explorer*
-> **"Verify Before You Share."**
+# VAJRA AI: Evidence-Grounded Misinformation Detection & Real-Time Verified Communication System
 
-![Stage](https://img.shields.io/badge/Stage-9%20Full%20Pipeline-blue)
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?logo=fastapi)
-![Status](https://img.shields.io/badge/Status-Active-brightgreen)
-
----
-
-## 📖 What Is VAJRA AI?
-
-VAJRA AI is an intelligent misinformation detection system. Given any claim or piece of text, it retrieves real-time web evidence, analyses it across multiple sources, and produces a grounded, explainable verdict — without hallucinating facts.
-
-The system is being built **incrementally**, one layer at a time.
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?logo=react&logoColor=black)](https://react.dev/)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Vite](https://img.shields.io/badge/Vite-8.0-646CFF.svg?logo=vite&logoColor=white)](https://vitejs.dev/)
+[![SQLite](https://img.shields.io/badge/Database-SQLite-003B57.svg?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## 🏗️ Architecture Roadmap
+## 📌 Overview
 
-| Stage | Component | Status |
-|-------|-----------|--------|
-| **1** | Web Evidence Retrieval (Tavily) | ✅ **Complete** |
-| **2** | Semantic Evidence Ranking (BGE) | ✅ **Complete** |
-| **3** | Source Reliability Scoring | ✅ **Complete** |
-| **4** | Evidence Ranking & Clustering (BM25 + RRF) | ✅ **Complete** |
-| **5** | Gemini Grounded Verdict Generation | ✅ **Complete** |
-| **6** | OCR / Image Claim Extraction | ✅ **Complete** |
-| **7** | Knowledge Graph Integration | ✅ **Complete** |
-| **8** | Multilingual Support | ✅ **Complete** |
-| **9** | React Frontend (full integration) | ✅ **Complete** |
+The rapid diffusion of digital media across modern messaging channels has created an unprecedented vulnerability to coordinated misinformation, synthetic media, and out-of-context claims. Conventional conversational AI assistants often exacerbate this problem through **sycophancy, conversational drift, and parametric hallucinations**—confidently asserting statements without verifiable citations.
+
+**VAJRA AI** is a comprehensive, evidence-grounded misinformation detection platform and authenticated real-time communication workstation. The system replaces black-box guessing with an auditable, multi-stage **Information Retrieval & Analytics (IRA)** pipeline. Instead of relying on an LLM's static training memory, VAJRA AI dynamically retrieves live multi-source evidence, evaluates source credibility, detects synthetic media manipulation, and synthesizes structured verdicts with complete provenance and knowledge graph visualization.
 
 ---
 
-## 📂 Project Structure
+## 🔬 Core System Architecture
 
 ```
-Dangerous_weapons/          <- project root
+                                  [ User Claim / Image ]
+                                             │
+                       ┌─────────────────────┴─────────────────────┐
+                       ▼                                           ▼
+             [ Text Claim Input ]                         [ Media Upload ]
+                       │                                           │
+                       │                        ┌──────────────────┴──────────────────┐
+                       │                        ▼                                     ▼
+                       │               [ Multimodal OCR ]                  [ Deepfake Detection ]
+                       │         (Gemini Vision + EasyOCR)                (Generative Artifacts)
+                       │                        │                                     │
+                       └────────────────►───────┤                                     ▼
+                                                │                            [ Synthetic Verdict ]
+                                                ▼
+                                    [ Language Normalization ]
+                                 (Pivot Translation via NLLB/API)
+                                                │
+                                                ▼
+                                  [ Web Evidence Retrieval ]
+                                   (Tavily Advanced Search)
+                                                │
+                                                ▼
+                                   [ Deep Content Scraping ]
+                                (Jina Reader + Regex Sanitizer)
+                                                │
+                        ┌───────────────────────┴───────────────────────┐
+                        ▼                                               ▼
+             [ Lexical Ranker ]                               [ Semantic Ranker ]
+            (Okapi BM25 Scoring)                          (BGE BAAI/bge-base-en-v1.5)
+                        │                                               │
+                        └───────────────────────┬───────────────────────┘
+                                                │
+                                                ▼
+                                 [ Reciprocal Rank Fusion ]
+                                    (Hybrid Score Fusion)
+                                                │
+                                                ▼
+                                 [ Domain Authority Scoring ]
+                                (Institutional Reliability Map)
+                                                │
+                                                ▼
+                                  [ Grounded NLI Inference ]
+                                  (Strict Zero-Shot Gemini)
+                                                │
+                        ┌───────────────────────┴───────────────────────┐
+                        ▼                                               ▼
+             [ Structured Verdict ]                          [ Knowledge Graph ]
+          (Multi-Stance Evidence)                        (Timeline & Spread Topology)
+```
+
+---
+
+## 💡 Key Features & Technical Highlights
+
+### 1. Hybrid Lexical & Dense Vector Information Retrieval
+* **Okapi BM25 Lexical Scoring:** Evaluates exact keyword occurrences, specific dates, entity names, and numerical statistics with document-length normalization ($k_1 = 1.5, b = 0.75$) and dynamic inverse document frequency ($\text{IDF}$) computation.
+* **Dense Semantic Embeddings:** Encodes claims and documents in a 768-dimensional latent vector space using `BAAI/bge-base-en-v1.5` dual-encoders, resolving the **Vocabulary Mismatch Problem** through asymmetric task-instruction encoding.
+* **Reciprocal Rank Fusion (RRF):** Combines the lexical and semantic rankings without manual coefficient tuning:
+  $$\text{RRF}(d) = \sum_{m \in M} \frac{1}{k + r_m(d)} \quad (k = 60)$$
+
+### 2. Live Content Extraction & Adversarial Ingestion Defense
+* **Automated DOM Scraping:** Employs Jina Reader (`r.jina.ai`) to extract clean, boilerplate-free Markdown from dynamic web pages with a strict 2.5-second timeout and binary file exclusion.
+* **Prompt Injection Neutralization:** Retrieved third-party web content is processed through an automated sanitization regex layer to disarm adversarial prompt injection attempts (e.g., `ignore previous instructions`, `you must say true`) prior to inference.
+
+### 3. Heuristic Domain Authority & Source Diversity
+* **Credibility Taxonomy:** Evaluates source domains against an auditable reliability taxonomy (Government: `0.90`, Scientific/Medical: `0.90`, Fact-Checking Agencies: `0.90`, Established News: `0.85`, Reference: `0.75`, User-Generated Forums: `0.30`).
+* **Multi-Factor Score Fusion:**
+  $$\text{Combined Score} = 0.70 \times \text{RRF Score} + 0.30 \times \text{Source Reliability Score}$$
+* **Diversity Indexing:** Measures unique publisher domains and computes maximum domain concentration ratios to detect echo-chamber syndication.
+
+### 4. Grounded Natural Language Inference (Zero Parametric Memory)
+* Evaluates ranked evidence under strictly bounded zero-shot prompts where the evaluator model is forbidden from using internal pre-training memory.
+* Generates calibrated verdicts: `TRUE`, `FALSE`, `PARTIALLY_TRUE`, `MISLEADING`, `CONFLICTING_EVIDENCE`, and `INSUFFICIENT_EVIDENCE`.
+* Stance attribution per source (`supporting`, `contradicting`, `contextual`).
+
+### 5. Multimodal Forensics & Forensic Image Verification
+* **Claim Extraction OCR:** Extracts text from viral flyers, memes, and regional language banners using Gemini Multimodal Vision with EasyOCR fallback.
+* **Generative Artifact Detection:** Inspects images for artificial textures, unnatural frequency patterns, lighting inconsistencies, and diffusion artifacts to determine authenticity (`AI_GENERATED`, `AUTHENTIC`, `UNCERTAIN`).
+
+### 6. Interactive Knowledge Graph & Spread Topology
+* Automatically maps verified claims into entity-relationship graphs featuring claim origin, chronological event timelines, documented spread vectors, variant wordings, and debunking chains.
+
+### 7. Two-Tier Verification Memory & Request Coalescing
+* Two-tier persistent SQLite caching (exact SHA-256 digest + normalized linguistic key) with configurable TTL.
+* Asynchronous single-flight request coalescing using locks to prevent redundant pipeline execution during concurrent traffic spikes.
+
+### 8. Authenticated Real-Time Chat Workstation
+* Person-to-person messaging engine with PBKDF2/bcrypt password hashing, JWT bearer sessions, SQLite persistence, and asynchronous WebSocket real-time updates (`/chat/ws`).
+* In-line, per-message verification triggering text and image fact-checking directly inside chat threads without intrusive conversational bots.
+
+---
+
+## 📂 Repository Structure
+
+```
+IRA_PBL/
+├── backend/
+│   ├── app/
+│   │   ├── db/                     # SQLAlchemy models and SQLite connection sessions
+│   │   │   ├── models.py           # User, Conversation, Message, Verification entities
+│   │   │   └── session.py          # Database engine and session lifecycle
+│   │   ├── routes/                 # FastAPI HTTP and WebSocket routers
+│   │   │   ├── chat.py             # Auth, conversation CRUD, and WebSocket manager
+│   │   │   └── verify.py           # Text verification, OCR, and AI image detection
+│   │   ├── services/               # Core analytical and algorithmic engines
+│   │   │   ├── ai_image_detector.py # Generative artifact detection
+│   │   │   ├── auth.py             # Password hashing and JWT token management
+│   │   │   ├── bm25_ranker.py      # Okapi BM25 and Reciprocal Rank Fusion (RRF)
+│   │   │   ├── evidence_analyzer.py# Jina Reader extraction and score weighting
+│   │   │   ├── knowledge_graph.py  # Claim timeline and topology builder
+│   │   │   ├── language_service.py # Language identification and translation
+│   │   │   ├── ocr_service.py      # Multimodal OCR (Gemini Vision + EasyOCR)
+│   │   │   ├── semantic_ranker.py  # BGE neural embeddings and cosine similarity
+│   │   │   ├── source_reliability.py# Domain credibility scoring
+│   │   │   ├── verdict_engine.py   # Grounded NLI verdict synthesis
+│   │   │   ├── verification_cache.py# Persistent memory and request coalescing
+│   │   │   └── web_retriever.py    # Tavily search integration
+│   │   └── main.py                 # Application bootstrap, CORS, and lifespan events
+│   ├── .env.example                # Template for environment configuration
+│   └── requirements.txt            # Python dependencies
 │
-└── backend/                <- FastAPI backend
-    ├── app/
-    │   ├── __init__.py
-    │   ├── main.py         <- FastAPI app entry point (lifespan, logging)
-    │   ├── routes/
-    │   │   ├── __init__.py
-    │   │   └── verify.py   <- POST /verify endpoint
-    │   └── services/
-    │       ├── __init__.py
-    │       ├── web_retriever.py    <- Stage 1: Tavily search service
-    │       └── semantic_ranker.py  <- Stage 2: BGE embedding + cosine ranking
-    ├── eval_ranker.py      <- Dev-only evaluation utility (demo / presentation)
-    ├── .env                <- secrets (never commit)
-    ├── .gitignore
-    └── requirements.txt
+└── frontend/
+    ├── public/                     # Static assets and icons
+    ├── src/
+    │   ├── api/                    # HTTP and WebSocket service clients
+    │   │   ├── chat.js             # Chat and messaging API adapter
+    │   │   └── verification.js     # Verification API adapter
+    │   ├── components/             # Modular React components
+    │   │   ├── chat/               # Conversations, composer, and message actions
+    │   │   ├── ClaimInput.jsx      # Input interface for text claims
+    │   │   ├── EvidenceCard.jsx    # Evidence presentation with reliability badges
+    │   │   ├── ImageUpload.jsx     # Multimodal image upload and preview
+    │   │   ├── KnowledgeGraph.jsx  # Interactive claim spread and timeline graph
+    │   │   ├── ResultsSection.jsx  # Structured verdict, confidence, and reasoning
+    │   │   └── Verifier.jsx        # Standalone verification interface
+    │   ├── hooks/                  # React state and verification hooks
+    │   ├── styles/                 # Design tokens and global stylesheets
+    │   ├── App.jsx                 # Workstation layout and mode navigation
+    │   └── main.jsx                # React application root
+    ├── index.html                  # HTML entry point
+    ├── package.json                # Frontend package dependencies
+    └── vite.config.js              # Vite server and reverse proxy configuration
 ```
 
 ---
 
-## ⚡ Stage 1 – Web Evidence Retrieval
+## 🛠️ Technology Stack
 
-### What it does
-
-```
-User Claim
-    ↓
-FastAPI  POST /verify
-    ↓
-Tavily Web Search API
-    ↓
-Top 5 relevant web results
-    ↓
-Structured evidence response (JSON)
-```
-
-No AI verdict. No classification. Pure retrieval.
+| Layer | Technology | Function |
+| :--- | :--- | :--- |
+| **Backend Framework** | FastAPI (Python 3.11+) | Asynchronous REST endpoints, WebSocket routing, Pydantic v2 validation |
+| **ASGI Server** | Uvicorn | High-performance asynchronous execution |
+| **Database & ORM** | SQLite & SQLAlchemy | Persistent user state, conversation history, and verification cache |
+| **Neural Embeddings** | `BAAI/bge-base-en-v1.5` | Dense 768-dimensional semantic passage representation |
+| **Lexical IR** | Pure Python Okapi BM25 | Term saturation ($k_1=1.5$), length penalty ($b=0.75$), dynamic IDF |
+| **Rank Aggregation** | Reciprocal Rank Fusion | Interleaved ranking combining lexical and semantic scores ($k=60$) |
+| **Web Discovery** | Tavily Search API | Real-time candidate URL and snippet retrieval |
+| **Content Scraping** | Jina AI Reader API | Boilerplate-free HTML-to-Markdown distillation |
+| **Multimodal Reasoning** | Google Gemini 3.1 Flash | Grounded NLI inference, multimodal OCR, and synthetic image analysis |
+| **Frontend Framework** | React 19 + Vite 8 | Retro workstation interface, reactive state management |
+| **Security** | PyJWT, PBKDF2/Bcrypt | Cryptographic access tokens and salted password storage |
 
 ---
 
-## 🧠 Stage 2 – Semantic Evidence Ranking
-
-### What it does
-
-```
-User Claim
-    ↓
-Tavily Web Search
-    ↓
-Retrieved Web Results
-    ↓
-BGE Embedding Model (BAAI/bge-base-en-v1.5)
-    ↓
-Cosine Similarity
-    ↓
-Semantic Ranking
-    ↓
-Top Relevant Evidence (ranked by semantic score)
-```
-
-After Stage 1 retrieves results from Tavily, Stage 2 re-ranks them using **semantic similarity** — so the most topically relevant results for the claim appear first, regardless of Tavily's original ordering.
-
-### Why BGE?
-
-`BAAI/bge-base-en-v1.5` is a state-of-the-art open-source embedding model from the **BGE (BAAI General Embedding)** family. It is optimised for asymmetric information retrieval, meaning:
-
-- The **claim** (query) is encoded with a task-description prefix.
-- The **evidence** (passages) are encoded without a prefix.
-
-This produces better cosine similarity scores than symmetric models for retrieval tasks.
-
-### Important: semantic_score ≠ truth
-
-> `semantic_score` measures **semantic relevance** — how topically similar the evidence is to the claim.  
-> It does **NOT** measure truthfulness.  
-> A `semantic_score` of `0.95` means the document is highly relevant, not that it is 95% true.
-
----
-
-## 🛠️ Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Language | Python 3.11+ |
-| Web Framework | FastAPI |
-| ASGI Server | Uvicorn |
-| Web Search | Tavily Search API |
-| Embedding Model | `BAAI/bge-base-en-v1.5` (sentence-transformers) |
-| Similarity | Cosine similarity (scikit-learn) |
-| Vectors | NumPy |
-| Validation | Pydantic v2 |
-| Config | python-dotenv |
-
----
-
-## 🚀 Setup & Running
+## 🚀 Installation & Local Setup
 
 ### Prerequisites
-- Python 3.11 or higher
-- A free Tavily API key → https://app.tavily.com
-
-### 1. Clone / navigate to project
-```bash
-cd backend
-```
-
-### 2. Create a virtual environment
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1     # Windows PowerShell
-# source .venv/bin/activate    # macOS / Linux
-```
-
-### 3. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-> **Note:** `sentence-transformers` will download the `BAAI/bge-base-en-v1.5` model (~440 MB)
-> on the first run. Subsequent starts use the cached model from `~/.cache/huggingface/`.
-
-### 4. Configure your API key
-Edit `backend/.env`:
-```env
-TAVILY_API_KEY=tvly-your-real-key-here
-```
-
-> **Warning:** Never commit `.env` — it is already in `.gitignore`.
-
-### 5. Start the server
-```powershell
-.venv\Scripts\uvicorn.exe app.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-The server starts at **http://127.0.0.1:8000**
-
-On first startup, the BGE model is pre-loaded via FastAPI's lifespan event — you will see log output like:
-```
-INFO | app.main | VAJRA AI startup — pre-loading BGE embedding model …
-INFO | app.services.semantic_ranker | Loading BGE model: BAAI/bge-base-en-v1.5 …
-INFO | app.services.semantic_ranker | BGE model loaded successfully.
-INFO | app.main | Startup complete. BGE model is ready.
-```
+* **Python:** 3.11 or higher
+* **Node.js:** 18.0 or higher
+* **API Credentials:**
+  * Tavily Search API Key ([https://app.tavily.com](https://app.tavily.com))
+  * Google Gemini API Key ([https://aistudio.google.com](https://aistudio.google.com))
 
 ---
 
-## 📡 API Reference
+### Step 1: Configure the Backend
 
-### `GET /`
-Health check.
-```json
-{ "message": "VAJRA AI backend is running" }
-```
+1. Navigate to the backend directory:
+   ```bash
+   cd backend
+   ```
 
-### `GET /health`
-```json
-{ "status": "ok" }
-```
+2. Create and activate a Python virtual environment:
+   ```bash
+   # Windows (PowerShell)
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
 
-### `POST /verify`
-Submit a claim and receive semantically ranked web evidence.
+   # Linux / macOS
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
 
-**Request:**
-```json
-{
-  "claim": "5G towers cause coronavirus"
-}
-```
+3. Install required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-**Response:**
-```json
-{
-  "claim": "5G towers cause coronavirus",
-  "results": [
-    {
-      "rank": 1,
-      "title": "Fact check: 5G and COVID-19",
-      "url": "https://example.com/article",
-      "content": "There is no scientific evidence linking 5G...",
-      "search_score": 0.91,
-      "semantic_score": 0.87
-    },
-    {
-      "rank": 2,
-      "title": "Reuters: No link between 5G and coronavirus",
-      "url": "https://reuters.com/...",
-      "content": "Scientists have confirmed that 5G radio waves...",
-      "search_score": 0.84,
-      "semantic_score": 0.79
+4. Configure environment variables:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` with your API keys:
+   ```env
+   TAVILY_API_KEY=tvly-your-tavily-api-key
+   GEMINI_API_KEY=your-gemini-api-key
+   VAJRA_JWT_SECRET=your-random-jwt-secret
+   VERIFY_CACHE_ENABLED=true
+   VERIFY_CACHE_TTL_HOURS=24.0
+   ```
+
+5. Launch the backend server:
+   ```bash
+   uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+   ```
+   *The interactive API documentation is available at `http://127.0.0.1:8000/docs`.*
+
+---
+
+### Step 2: Configure the Frontend
+
+1. Open a new terminal and navigate to the frontend directory:
+   ```bash
+   cd frontend
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Launch the Vite development server:
+   ```bash
+   npm run dev
+   ```
+   *The workstation will be accessible at `http://localhost:5173`.*
+
+---
+
+## 📡 API Specification
+
+### 1. Text Claim Verification
+`POST /verify`
+* Submits a factual claim for full-pipeline verification.
+* **Payload:**
+  ```json
+  {
+    "claim": "Water boils at 100 degrees Celsius at sea level",
+    "force_refresh": false
+  }
+  ```
+* **Response Summary:**
+  ```json
+  {
+    "original_claim": "Water boils at 100 degrees Celsius at sea level",
+    "verdict": "TRUE",
+    "analysis_confidence": 0.98,
+    "summary": "Scientific consensus confirms that pure water boils at 100°C under 1 atmosphere of pressure.",
+    "evidence": [
+      {
+        "rank": 1,
+        "title": "Boiling Point of Water - USGS",
+        "url": "https://www.usgs.gov/...",
+        "source_domain": "usgs.gov",
+        "source_reliability_score": 0.90,
+        "reliability_tier": "HIGH",
+        "combined_score": 0.884,
+        "stance": "supporting"
+      }
+    ],
+    "source_diversity": {
+      "unique_domains": 5,
+      "max_domain_concentration": 0.20
     }
-  ]
-}
-```
+  }
+  ```
 
-**Field descriptions:**
+### 2. Image OCR Fact-Check
+`POST /verify/image`
+* Multipart upload (`image`) extracting claims from images before executing verification.
 
-| Field | Description |
-|-------|-------------|
-| `rank` | 1-based position after semantic re-ranking |
-| `search_score` | Original Tavily relevance score (preserved for future hybrid scoring) |
-| `semantic_score` | BGE cosine similarity between claim and evidence (semantic relevance, not truth probability) |
+### 3. AI Synthetic Image Detection
+`POST /verify/image/ai-detect`
+* Multipart upload (`image`) analyzing digital generation artifacts.
+* **Response Verdicts:** `AI_GENERATED`, `AUTHENTIC`, or `UNCERTAIN`.
 
-**Error codes:**
-
-| Code | Meaning |
-|------|---------|
-| `422` | Invalid / empty claim |
-| `503` | Tavily API key missing |
-| `502` | Tavily API or network failure |
-| `404` | No results found for claim |
-| `500` | Semantic ranking failure (BGE error) |
-
-### `GET /docs`
-Interactive Swagger UI — test all endpoints in the browser.  
-http://127.0.0.1:8000/docs
+### 4. Real-Time Chat & Messaging
+* `POST /chat/register` & `POST /chat/login`: User onboarding and JWT bearer generation.
+* `GET /chat/conversations`: Fetch active threads.
+* `POST /chat/conversations/{id}/messages`: Dispatch text messages.
+* `POST /chat/conversations/{id}/messages/image`: Dispatch image attachments.
+* `WS /chat/ws?token={token}`: Real-time event subscription.
 
 ---
 
-## 🧪 Quick Test (PowerShell)
+## 🔒 Security & Responsible AI Considerations
 
-```powershell
-# Health check
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/" -Method GET
-
-# Verify a claim (returns ranked evidence)
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/verify" `
-  -Method POST `
-  -Body '{"claim": "The Earth is flat"}' `
-  -ContentType "application/json" | ConvertTo-Json -Depth 5
-
-# Test validation -- should return 422
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/verify" `
-  -Method POST `
-  -Body '{"claim": ""}' `
-  -ContentType "application/json"
-```
+* **Deterministic Grounding:** LLM inference is strictly isolated from open-ended web generation, mitigating hallucination and bias propagation.
+* **Adversarial Web Sanitization:** Ingested web content is pre-filtered against prompt injection vectors before being incorporated into inference contexts.
+* **Privacy by Design:** Personal chat messages and verification queries are decoupled; verification results are attached per message ID and are never used for model re-training.
+* **Credential Isolation:** Client applications communicate through scoped JWT bearer tokens; sensitive API keys are restricted strictly to server-side environments.
 
 ---
 
-## 🔬 Evaluation Utility (Development Only)
+## 📄 License
 
-Run the standalone evaluation script to test the full pipeline and see ranked output:
-
-```powershell
-# From backend/ with the venv active
-python eval_ranker.py
-```
-
-Example output:
-```
-======================================================================
-Claim:
-  5G towers cause coronavirus
-======================================================================
-
-Tavily returned 5 result(s).
-BGE ranked 5 result(s) successfully.
-
-Retrieved results (sorted by semantic relevance):
-
-  Rank 1
-  Semantic relevance score : 0.8741
-  Tavily search score      : 0.91
-  Title                    : Fact check: 5G and COVID-19 conspiracy theories
-  URL                      : https://...
-
-  Rank 2
-  Semantic relevance score : 0.8123
-  Tavily search score      : 0.87
-  Title                    : No scientific evidence links 5G to coronavirus
-  URL                      : https://...
-
-  ⚠  Note: semantic_score measures relevance, NOT truthfulness.
-```
-
----
-
-## 🔐 Security Notes
-
-- The Tavily API key is **only used server-side** and is never exposed to the frontend.
-- CORS is configured to allow only `http://localhost:5173` (Vite dev server) during local development.
-- No stack traces are returned in API error responses.
-- API keys are never logged.
-
----
-
-## 📦 Dependencies
-
-```
-fastapi
-uvicorn
-tavily-python
-python-dotenv
-pydantic
-sentence-transformers
-numpy
-scikit-learn
-```
-
----
-
-## 📝 Changelog
-
-### Stage 2 – 2026-09-11
-- `semantic_ranker.py` — BGE embedding service with singleton model loading
-- BGE model pre-loaded at startup via FastAPI lifespan (not per-request)
-- Cosine similarity ranking using `sklearn.metrics.pairwise.cosine_similarity`
-- Asymmetric embedding: query prefix on claim, passage-side encoding for evidence
-- Empty/short content filtering — malformed results skipped without crashing
-- Both `search_score` (Tavily) and `semantic_score` (BGE) preserved in response
-- Results sorted by `semantic_score DESC`; `rank` field added (1-based)
-- Structured logging across all services (no API keys or sensitive data logged)
-- `eval_ranker.py` — standalone development evaluation utility
-- Version bumped to `0.2.0`
-
-### Stage 1 – 2026-09-11
-- Backend scaffolded (`app/`, `routes/`, `services/`)
-- `POST /verify` endpoint with Pydantic v2 validation
-- `search_evidence()` service using Tavily advanced search
-- Health endpoints (`GET /`, `GET /health`)
-- CORS configured for `localhost:5173`
-- Error handling: missing key, network failure, empty results
-- `.env` + `.gitignore` set up securely
-- Swagger UI available at `/docs`
-
----
-
-## 🤝 Contributing
-
-This is an incremental build. Each stage is isolated and tested before the next begins.
-
----
-
-*README last updated: Stage 9 – Full Pipeline Hardening*
+This project is licensed under the [MIT License](LICENSE).

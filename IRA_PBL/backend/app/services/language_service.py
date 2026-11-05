@@ -32,7 +32,7 @@ SUPPORTED_LANGUAGES: dict[str, str] = {
 }
 
 # ── Singleton Gemini client for translation ────────────────────────────────────
-_TRANSLATION_MODEL = "gemini-3.5-flash-lite"
+_TRANSLATION_MODEL = "gemini-3.1-flash-lite"
 _gemini_client: genai.Client | None = None
 
 

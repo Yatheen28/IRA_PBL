@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text, JSON, Table
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, JSON, Table, Integer, Float, Index
 from sqlalchemy.orm import relationship
 from .session import Base
 
@@ -50,3 +50,32 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
     sender = relationship("User", back_populates="messages")
     reply_to = relationship("Message", remote_side=[id])
+
+
+class VerificationCache(Base):
+    __tablename__ = "verification_cache"
+
+    cache_key = Column(String(64), primary_key=True, index=True)
+    raw_claim = Column(Text, nullable=False)
+    normalized_claim = Column(Text, nullable=False, index=True)
+    language = Column(String(10), nullable=False, default="en")
+    mode = Column(String(20), nullable=False, default="standard")
+    verdict = Column(String(30), nullable=False)
+    analysis_confidence = Column(Float, nullable=False)
+    summary = Column(Text, nullable=False)
+    reasoning = Column(Text, nullable=False)
+    evidence = Column(JSON, nullable=False)
+    knowledge_graph = Column(JSON, nullable=False)
+    source_diversity = Column(JSON, nullable=True)
+    limitations = Column(JSON, nullable=True)
+    pipeline_version = Column(String(20), nullable=False, default="3.0.0")
+    hit_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    last_accessed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_cache_expires_key", "expires_at", "cache_key"),
+        Index("idx_cache_normalized_mode", "normalized_claim", "mode"),
+    )
+

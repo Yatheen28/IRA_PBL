@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-_AI_DETECT_MODEL = "gemini-3.5-flash-lite"
+_AI_DETECT_MODEL = "gemini-3.1-flash-lite"
 
 _PROMPT = """Analyse this image carefully and determine whether it appears to be:
 1. AI-GENERATED (created by an AI image generator like DALL-E, Midjourney, Stable Diffusion, etc.)
@@ -74,21 +74,27 @@ def detect_ai_image(image_bytes: bytes, filename: str = "image.jpg") -> dict:
         from google.genai import types
 
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=_AI_DETECT_MODEL,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(
-                            inline_data=types.Blob(mime_type=mime_type, data=b64)
-                        ),
-                        types.Part(text=_PROMPT),
+        raw = None
+        for model_name in [_AI_DETECT_MODEL, "gemini-flash-latest", "gemini-3-flash-preview"]:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                                types.Part.from_text(text=_PROMPT),
+                            ],
+                        )
                     ],
                 )
-            ],
-        )
-        raw = response.text.strip()
+                raw = response.text.strip()
+                break
+            except Exception as model_err:
+                logger.warning("AI detect attempt with %s failed: %s", model_name, model_err)
+        if not raw:
+            raise RuntimeError("All AI image detection model attempts failed.")
     except Exception as exc:
         logger.error("Gemini AI image detection failed: %s", exc)
         raise RuntimeError(f"AI image detection failed: {exc}") from exc
